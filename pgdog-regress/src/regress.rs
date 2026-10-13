@@ -9,6 +9,8 @@ use crate::{Connection, conn::ConnectionArgs};
 #[derive(Debug, Clone)]
 pub struct RegressTest {
     queries: Vec<String>,
+    fail_fast: bool,
+    error: bool,
 }
 
 impl Deref for RegressTest {
@@ -24,7 +26,16 @@ impl RegressTest {
     pub fn new(queries: &[&str]) -> Self {
         Self {
             queries: queries.iter().map(|f| f.to_string()).collect(),
+            fail_fast: true,
+            error: false,
         }
+    }
+
+    /// Log mismatches and continue, then panic at the end if any were found.
+    /// Connection errors still stop the run immediately.
+    pub fn no_fail_fast(mut self) -> Self {
+        self.fail_fast = false;
+        self
     }
 
     /// Run regression tests for queries included as part of the standard Postgres
@@ -53,11 +64,15 @@ impl RegressTest {
             }
         }
 
-        Self { queries }
+        Self {
+            queries,
+            fail_fast: true,
+            error: false,
+        }
     }
 
     fn assert_eq(
-        &self,
+        &mut self,
         query: usize,
         a: (ConnectionArgs<'_>, Vec<Message>),
         b: (ConnectionArgs<'_>, Vec<Message>),
@@ -70,7 +85,7 @@ impl RegressTest {
             .collect::<Vec<_>>()
             .join("\n");
         if a.1 != b.1 {
-            panic!(
+            eprintln!(
                 r#"
 =====================
 Query: {}
@@ -86,49 +101,85 @@ Context: {}
 {:#?}
 "#,
                 actual, context_queries, a.0, a.1, b.0, b.1
-            )
+            );
+            self.error = true;
+
+            if self.fail_fast {
+                panic!("Failing fast, the rest of the test suite won't run.");
+            }
         }
+    }
+
+    fn query_error(&self, query: usize, server: ConnectionArgs<'_>, error: Error) -> Error {
+        let context = self.queries[query.saturating_sub(3)..query].join("\n");
+        Error::new(
+            error.kind(),
+            format!(
+                "Query: {}\nContext: {context}\nServer: {server}\n{error}",
+                self.queries[query]
+            ),
+        )
     }
 
     /// Run simple protocol regression tests.
     pub async fn run_simple(
-        &self,
+        &mut self,
         a: ConnectionArgs<'_>,
         b: ConnectionArgs<'_>,
     ) -> Result<(), Error> {
         let mut conn_a = Connection::connect(a).await?;
         let mut conn_b = Connection::connect(b).await?;
 
-        for (idx, query) in self.queries.iter().enumerate() {
-            let res_a = conn_a.query_simple(query).await?;
-            let res_b = conn_b.query_simple(query).await?;
+        for (idx, query) in self.queries.clone().iter().enumerate() {
+            let res_a = conn_a
+                .query_simple(query)
+                .await
+                .map_err(|error| self.query_error(idx, a, error))?;
+            let res_b = conn_b
+                .query_simple(query)
+                .await
+                .map_err(|error| self.query_error(idx, b, error))?;
 
             self.assert_eq(idx, (a, res_a), (b, res_b));
+        }
+
+        if self.error {
+            panic!("Regression tests failed");
         }
 
         Ok(())
     }
 
     pub async fn run_extended(
-        &self,
+        &mut self,
         a: ConnectionArgs<'_>,
         b: ConnectionArgs<'_>,
     ) -> Result<(), Error> {
         let mut conn_a = Connection::connect(a).await?;
         let mut conn_b = Connection::connect(b).await?;
 
-        for (idx, query) in self.queries.iter().enumerate() {
-            let res_a = conn_a.query_simple(query).await?;
-            let res_b = conn_b.query_simple(query).await?;
+        for (idx, query) in self.queries.clone().iter().enumerate() {
+            let res_a = conn_a
+                .query_simple(query)
+                .await
+                .map_err(|error| self.query_error(idx, a, error))?;
+            let res_b = conn_b
+                .query_simple(query)
+                .await
+                .map_err(|error| self.query_error(idx, b, error))?;
 
             self.assert_eq(idx, (a, res_a), (b, res_b));
+        }
+
+        if self.error {
+            panic!("Regression tests failed");
         }
 
         Ok(())
     }
 
     /// Run this test against hardcoded addresses we use in local dev and in CI.
-    pub async fn run_simple_ci(&self) -> Result<(), Error> {
+    pub async fn run_simple_ci(&mut self) -> Result<(), Error> {
         let direct = ConnectionArgs {
             addr: "127.0.0.1:5432",
             user: "pgdog",
@@ -159,7 +210,7 @@ mod test {
 
     #[tokio::test]
     async fn test_simple() {
-        let test = RegressTest::new(&["SELECT 1"]);
+        let mut test = RegressTest::new(&["SELECT 1"]);
         let conn = ConnectionArgs {
             addr: "127.0.0.1:5432",
             user: "pgdog",
@@ -185,6 +236,7 @@ mod test {
         };
 
         RegressTest::new_pg_regress(&["guc"])
+            .no_fail_fast()
             .run_simple(server_a, server_b)
             .await
             .unwrap();

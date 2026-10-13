@@ -190,7 +190,14 @@ impl Connection {
     async fn read_messages(&mut self) -> Result<Vec<Message>, Error> {
         let mut messages = Vec::new();
         loop {
-            let message = self.read_message().await?;
+            let message = self.read_message().await.map_err(|error| {
+                Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; failed before ReadyForQuery; received messages: {messages:#?}"
+                    ),
+                )
+            })?;
             let ready = matches!(message, Message::ReadyForQuery(_));
             messages.push(message);
             if ready {
