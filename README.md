@@ -20,19 +20,21 @@ Write your tests:
 ```rust
 use pgdog_regress::prelude::*;
 
-let test = RegressTest::new(&["SELECT 1", "SELECT 1234"]);
 let server_a = ConnectionArgs {
-    addr: "127.0.0.1:5432".into(),
-    user: "pgdog".into(),
-    password: "pgdog".into(),
-    database: "pgdog".into()
+    addr: "127.0.0.1:5432",
+    user: "pgdog",
+    password: "pgdog",
+    database: "pgdog",
 };
-let server_b = {
-    ..server_a,
+let server_b = ConnectionArgs {
     addr: "127.0.0.1:6432".into(),
+    ..server_a
 };
 
-test.run_simple(&server_a, &server_b).await;
+RegressTest::new(&["SELECT 1"])
+    .run_simple(server_a, server_b)
+    .await
+    .unwrap();
 ```
 
 The tests will panic if the two servers respond with different anything.

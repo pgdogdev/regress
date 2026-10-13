@@ -7,16 +7,25 @@ use postgres_protocol::{
         frontend,
     },
 };
-use std::io::{Error, ErrorKind};
+use std::{
+    fmt::Display,
+    io::{Error, ErrorKind},
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConnectionArgs {
-    pub addr: String,
-    pub user: String,
-    pub database: String,
-    pub password: String,
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub struct ConnectionArgs<'a> {
+    pub addr: &'a str,
+    pub user: &'a str,
+    pub database: &'a str,
+    pub password: &'a str,
+}
+
+impl Display for ConnectionArgs<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}/{}", self.user, self.addr, self.database)
+    }
 }
 
 #[derive(Debug)]
@@ -25,7 +34,8 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub async fn connect(args: ConnectionArgs) -> Result<Self, Error> {
+    /// Create a connection and authenticate if needed.
+    pub async fn connect(args: ConnectionArgs<'_>) -> Result<Self, Error> {
         let ConnectionArgs {
             addr,
             user,
@@ -39,8 +49,8 @@ impl Connection {
         let mut buf = BytesMut::new();
         frontend::startup_message(
             [
-                ("user", user.as_str()),
-                ("database", database.as_str()),
+                ("user", user),
+                ("database", database),
                 ("client_encoding", "UTF8"),
             ],
             &mut buf,
@@ -197,10 +207,10 @@ mod test {
     #[tokio::test]
     async fn test_connect() {
         let mut conn = Connection::connect(ConnectionArgs {
-            addr: "127.0.0.1:5432".to_string(),
-            user: "pgdog".to_string(),
-            database: "pgdog".to_string(),
-            password: "pgdog".to_string(),
+            addr: "127.0.0.1:5432",
+            user: "pgdog",
+            database: "pgdog",
+            password: "pgdog",
         })
         .await
         .unwrap();

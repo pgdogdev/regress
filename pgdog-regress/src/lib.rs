@@ -1,4 +1,5 @@
 mod conn;
+pub mod prelude;
 mod regress;
 
 pub use conn::Connection;

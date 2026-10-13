@@ -2,6 +2,8 @@
 
 use std::{io::Error, ops::Deref};
 
+use postgres_protocol::message::backend::Message;
+
 use crate::{Connection, conn::ConnectionArgs};
 
 #[derive(Debug, Clone)]
@@ -54,30 +56,72 @@ impl RegressTest {
         Self { queries }
     }
 
+    fn assert_eq(
+        &self,
+        query: usize,
+        a: (ConnectionArgs<'_>, Vec<Message>),
+        b: (ConnectionArgs<'_>, Vec<Message>),
+    ) {
+        let actual = &self.queries[query];
+        let context_size = std::cmp::max(query as isize - 3, 0) as usize;
+        let context_queries = &self.queries[context_size..query]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if a.1 != b.1 {
+            panic!(
+                r#"
+=====================
+Query: {}
+=====================
+Context: {}
+=====================
+{}:
+
+{:#?}
+=====================
+{}:
+
+{:#?}
+"#,
+                actual, context_queries, a.0, a.1, b.0, b.1
+            )
+        }
+    }
+
     /// Run simple protocol regression tests.
-    pub async fn run_simple(&self, a: ConnectionArgs, b: ConnectionArgs) -> Result<(), Error> {
-        let mut a = Connection::connect(a).await?;
-        let mut b = Connection::connect(b).await?;
+    pub async fn run_simple(
+        &self,
+        a: ConnectionArgs<'_>,
+        b: ConnectionArgs<'_>,
+    ) -> Result<(), Error> {
+        let mut conn_a = Connection::connect(a).await?;
+        let mut conn_b = Connection::connect(b).await?;
 
-        for query in &self.queries {
-            let res_a = a.query_simple(query).await?;
-            let res_b = b.query_simple(query).await?;
+        for (idx, query) in self.queries.iter().enumerate() {
+            let res_a = conn_a.query_simple(query).await?;
+            let res_b = conn_b.query_simple(query).await?;
 
-            assert_eq!(res_a, res_b, "query: {}", query);
+            self.assert_eq(idx, (a, res_a), (b, res_b));
         }
 
         Ok(())
     }
 
-    pub async fn run_extended(&self, a: ConnectionArgs, b: ConnectionArgs) -> Result<(), Error> {
-        let mut a = Connection::connect(a).await?;
-        let mut b = Connection::connect(b).await?;
+    pub async fn run_extended(
+        &self,
+        a: ConnectionArgs<'_>,
+        b: ConnectionArgs<'_>,
+    ) -> Result<(), Error> {
+        let mut conn_a = Connection::connect(a).await?;
+        let mut conn_b = Connection::connect(b).await?;
 
-        for query in &self.queries {
-            let res_a = a.query_extended(query, &[]).await?;
-            let res_b = b.query_extended(query, &[]).await?;
+        for (idx, query) in self.queries.iter().enumerate() {
+            let res_a = conn_a.query_simple(query).await?;
+            let res_b = conn_b.query_simple(query).await?;
 
-            assert_eq!(res_a, res_b, "query: {}", query);
+            self.assert_eq(idx, (a, res_a), (b, res_b));
         }
 
         Ok(())
@@ -86,17 +130,17 @@ impl RegressTest {
     /// Run this test against hardcoded addresses we use in local dev and in CI.
     pub async fn run_simple_ci(&self) -> Result<(), Error> {
         let direct = ConnectionArgs {
-            addr: "127.0.0.1:5432".to_string(),
-            user: "pgdog".to_string(),
-            password: "pgdog".to_string(),
-            database: "pgdog".to_string(),
+            addr: "127.0.0.1:5432",
+            user: "pgdog",
+            password: "pgdog",
+            database: "pgdog",
         };
 
         let pgdog = ConnectionArgs {
-            addr: "127.0.0.1:6432".to_string(),
-            user: "pgdog".to_string(),
-            password: "pgdog".to_string(),
-            database: "pgdog".to_string(),
+            addr: "127.0.0.1:6432",
+            user: "pgdog",
+            password: "pgdog",
+            database: "pgdog",
         };
 
         self.run_simple(direct, pgdog).await
@@ -117,12 +161,32 @@ mod test {
     async fn test_simple() {
         let test = RegressTest::new(&["SELECT 1"]);
         let conn = ConnectionArgs {
-            addr: "127.0.0.1:5432".to_string(),
-            user: "pgdog".to_string(),
-            password: "pgdog".to_string(),
-            database: "pgdog".to_string(),
+            addr: "127.0.0.1:5432",
+            user: "pgdog",
+            password: "pgdog",
+            database: "pgdog",
         };
 
         test.run_simple(conn.clone(), conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn test_local() {
+        let server_a = ConnectionArgs {
+            addr: "127.0.0.1:5432".into(),
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database: "pgdog".into(),
+        };
+        let server_b = ConnectionArgs {
+            addr: "127.0.0.1:6432".into(),
+            ..server_a
+        };
+
+        RegressTest::new_pg_regress(&["guc"])
+            .run_simple(server_a, server_b)
+            .await
+            .unwrap();
     }
 }
