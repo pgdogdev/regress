@@ -1,0 +1,11 @@
+[package]
+name = "pgdog-regress"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytes = "1"
+fallible-iterator = "0.2"
+pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "a4784fc603563d3db8e9f381347f039f39b1dd85", features = ["postgres-regress"]}
+postgres-protocol = { path = "../deps/postgres-protocol" }
+tokio = { version = "1", features = ["full"] }
