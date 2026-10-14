@@ -1,3 +1,4 @@
+mod comparison;
 mod conn;
 pub mod prelude;
 mod regress;

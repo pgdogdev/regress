@@ -4,7 +4,7 @@ use std::{io::Error, ops::Deref};
 
 use postgres_protocol::message::backend::Message;
 
-use crate::{Connection, conn::ConnectionArgs};
+use crate::{Connection, comparison::responses_equal, conn::ConnectionArgs};
 
 #[derive(Debug, Clone)]
 pub struct RegressTest {
@@ -84,7 +84,7 @@ impl RegressTest {
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        if a.1 != b.1 {
+        if !responses_equal(&a.1, &b.1) {
             eprintln!(
                 r#"
 =====================
