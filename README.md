@@ -39,11 +39,14 @@ RegressTest::new(&["SELECT 1"])
 
 The tests will panic if the two servers respond with different anything.
 
-### Postgres regression suite
+### Known errors
 
-Postgres comes with its own regression tests, which you can run pretty easily:
+To exclude known bad queries from execution, mark queries in the test suite:
 
 ```rust
-let test = RegressTest::new_pg_regress(&["guc"]));
-test.run_simple(&server_a, &server_b).await;
+RegressTest::new(&["SELECT 1", "SELECT version()"])
+    .known_bad_queries(&["SELECT version()"])
+    .run_simple(server_a, server_b)
+    .await
+    .unwrap();
 ```

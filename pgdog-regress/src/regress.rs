@@ -1,6 +1,6 @@
 //! Regression testing harness.
 
-use std::{io::Error, ops::Deref};
+use std::{collections::HashSet, io::Error, ops::Deref};
 
 use postgres_protocol::message::backend::Message;
 
@@ -35,6 +35,16 @@ impl RegressTest {
     /// Connection errors still stop the run immediately.
     pub fn no_fail_fast(mut self) -> Self {
         self.fail_fast = false;
+        self
+    }
+
+    /// Remove known bad queries from the test suite so they are never executed.
+    /// Matching ignores surrounding whitespace, but otherwise requires identical
+    /// SQL text. Repeated calls exclude additional queries.
+    pub fn known_bad_queries(mut self, queries: &[&str]) -> Self {
+        let excluded: HashSet<_> = queries.iter().map(|query| query.trim()).collect();
+        self.queries
+            .retain(|query| !excluded.contains(query.trim()));
         self
     }
 
@@ -201,6 +211,74 @@ Context: {}
 #[cfg(test)]
 mod test {
     use super::*;
+
+    fn compare(test: &mut RegressTest, query: usize, different: bool) {
+        let server = ConnectionArgs {
+            addr: "unused",
+            user: "pgdog",
+            password: "pgdog",
+            database: "pgdog",
+        };
+        let a = vec![Message::EmptyQueryResponse];
+        let b = if different { vec![] } else { a.clone() };
+        test.assert_eq(query, (server, a), (server, b));
+    }
+
+    #[test]
+    fn known_bad_queries_are_removed_in_both_modes() {
+        for fail_fast in [true, false] {
+            let mut test = RegressTest::new(&[
+                "SELECT 10",
+                "\nSELECT 1\n",
+                "SELECT 2",
+                "SELECT 1",
+                "SELECT 3",
+            ])
+            .known_bad_queries(&[" SELECT 1 "])
+            .known_bad_queries(&["SELECT 2"]);
+            test.fail_fast = fail_fast;
+
+            assert_eq!(test.queries, ["SELECT 10", "SELECT 3"]);
+        }
+    }
+
+    #[test]
+    fn all_queries_can_be_excluded() {
+        let test = RegressTest::new(&["SELECT 1"]).known_bad_queries(&["SELECT 1"]);
+        assert!(test.is_empty());
+    }
+
+    #[test]
+    fn known_bad_queries_can_be_removed_from_pg_regress() {
+        let test = RegressTest::new_pg_regress(&["guc"]);
+        let excluded = test[0].clone();
+        let expected: Vec<_> = test
+            .iter()
+            .filter(|query| query.trim() != excluded.trim())
+            .cloned()
+            .collect();
+        let test = test.known_bad_queries(&[&excluded]);
+        assert_eq!(test.queries, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "Failing fast")]
+    fn unlisted_mismatches_still_fail_fast() {
+        let mut test =
+            RegressTest::new(&["SELECT 1", "SELECT 10"]).known_bad_queries(&["SELECT 1"]);
+        compare(&mut test, 0, true);
+    }
+
+    #[test]
+    fn known_bad_queries_do_not_clear_other_failures() {
+        let mut test = RegressTest::new(&["SELECT 1", "SELECT 2"])
+            .no_fail_fast()
+            .known_bad_queries(&["SELECT 2"]);
+        compare(&mut test, 0, true);
+        assert!(test.error);
+        let test = test.known_bad_queries(&["SELECT 1"]);
+        assert!(test.error);
+    }
 
     #[test]
     fn test_guc() {
